@@ -50,7 +50,8 @@ def find_chunk_boundaries(
 
 
 ## Usage
-with open(..., "rb") as f:
+txt = "data\TinyStoriesV2-GPT4-train.txt"
+with open(txt, "rb") as f:
     num_processes = 4
     boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
