@@ -20,6 +20,7 @@ dependencies = [
     "ty>=0.0.26",
     "ruff>=0.15.8",
     "ipynb>=0.5.1",
+    "ipykernel>=7.3.0",
 ]
 
 [build-system]

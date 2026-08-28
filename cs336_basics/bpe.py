@@ -2,7 +2,7 @@ from multiprocessing import Pool
 import os
 from typing import BinaryIO
 import regex as re
-from collections import Counter
+from collections import Counter, defaultdict
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -158,24 +158,21 @@ def train_bpe(
         ):
             frequency_table += partial
 
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
-        # for start, end in zip(boundaries[:-1], boundaries[1:]):
-        #     f.seek(start)
-        #     chunk = f.read(end - start).decode("utf-8", errors="ignore")
-        #     # Run pre-tokenization on your chunk and store the counts for each pre-token
-
-
     # Merge
     merges: list[tuple[bytes, bytes]] = []
     pairs_count: Counter[tuple[bytes, bytes]] = Counter()
+    # to find affected pair efficiently 
+    pair_index_in_table: defaultdict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = defaultdict(set)
     iter_togo = vocab_size - len(vocab)
+
     # count frequency of pairs
     for key, frequency in frequency_table.items():
         for pair in zip(key, key[1:]):
-            pairs_count[pair]   += frequency
+            pairs_count[pair] += frequency
+            pair_index_in_table[pair].add(key)
+
     # merge and update
-    for cur_iter in range(iter_togo):
+    for _ in range(iter_togo):
         # the most frequent and lexicographically greatest pair
         if not pairs_count:
             break
@@ -191,46 +188,51 @@ def train_bpe(
         # add new token into vocab
         vocab[len(vocab)] = merged_token
 
-        # find all affected token tuples and avoiding editing frequency_table in its own iteration
-        affected_tuple = [
-            token_tuple
-            for token_tuple in frequency_table.keys()
-            if best in zip(token_tuple, token_tuple[1:])
-        ]
-        
+        # avoid editing pair_index_in_table while iterating it
+        affected_token_tuples = pair_index_in_table[best].copy()
         # update pairs_count smartly
-        for token_tuple in affected_tuple:
+        for token_tuple in affected_token_tuples:
             frequency = frequency_table[token_tuple]
             # list for the convience of replacing
             new_token_list = list(token_tuple)
-   
+
             i=0
             while i+1 < len(new_token_list):
                 if (new_token_list[i], new_token_list[i+1]) == best:
                     # update pairs_count
                     # if any left neighbour
                     if i > 0:
-                        update_pairs_count(pairs_count, (new_token_list[i-1], new_token_list[i]), -frequency)
-                        update_pairs_count(pairs_count, (new_token_list[i-1], merged_token), frequency)
+                        left_neibour = (new_token_list[i-1], new_token_list[i])
+                        update_pairs_count(pairs_count, left_neibour, -frequency)
+
+                        new_left_neibour = (new_token_list[i-1], merged_token)
+                        update_pairs_count(pairs_count, new_left_neibour, frequency)
                     # if any right neighbour
                     if i+2 < len(new_token_list):
-                        update_pairs_count(pairs_count, (new_token_list[i+1], new_token_list[i+2]), -frequency)
-                        update_pairs_count(pairs_count, (merged_token, new_token_list[i+2]), frequency)
+                        right_neibour = (new_token_list[i+1], new_token_list[i+2])
+                        update_pairs_count(pairs_count, right_neibour, -frequency)
+
+                        new_right_neibour = (merged_token, new_token_list[i+2])
+                        update_pairs_count(pairs_count, new_right_neibour, frequency)
 
                     # save token change
                     new_token_list.pop(i)
                     new_token_list[i] = merged_token
-
                 i+=1
+
                     
             # update frequency_table.keys()
             new_token_tuple = tuple(new_token_list)
-            # if merged, replace the key with new token tuple
-            if len(new_token_list) != len(token_tuple):
-                del frequency_table[token_tuple]  
-                # case: ab+c and a+bc -> += instead of =
-                frequency_table[new_token_tuple] += frequency
-                
+            del frequency_table[token_tuple]  
+            # case: ab+c and a+bc -> += instead of =
+            frequency_table[new_token_tuple] += frequency
+
+            for pair in set(zip(token_tuple, token_tuple[1:])):
+                pair_index_in_table[pair].remove(token_tuple)
+            for pair in set(zip(new_token_tuple, new_token_tuple[1:])):
+                pair_index_in_table[pair].add(new_token_tuple)
+
+        del pair_index_in_table[best] 
         del pairs_count[best] 
 
     return vocab, merges
@@ -244,4 +246,4 @@ def update_pairs_count(
     if counter[pair] == 0:
         del counter[pair]
         return 
-    return counter
+    return 
